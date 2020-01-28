@@ -7,10 +7,13 @@ This is a package that allows you to read from and write to serial ports in Go.
 OS support
 ----------
 
-Currently this package works only on OS X, Linux and Windows. It could probably be ported
-to other Unix-like platforms simply by updating a few constants; get in touch if
-you are interested in helping and have hardware to test with.
+Currently this package works only on Linux and maybe Windows. Support for other systems may be adapted at a later date.
 
+TODO
+----------
+* Allow setting/getting state of DTR pin
+* Allow setting of Timeout
+* Allow setting of Deadline
 
 Installation
 ------------
@@ -32,7 +35,7 @@ Set up a `serial.OpenOptions` struct, then call `serial.Open`. For example:
 ````go
     import "fmt"
     import "log"
-    import "github.com/jacobsa/go-serial/serial"
+    import "github.com/Plantiga/simple-go-serial/serial"
 
     ...
 
