@@ -85,6 +85,36 @@ func (p *Port) SetDTR(state bool) error {
 	return nil
 }
 
+// RTS
+// See: https://en.wikipedia.org/wiki/Data_Terminal_Ready
+func (p *Port) RTS() (bool, error) {
+	var status int
+	err := ioctl(unix.TIOCMGET, p.fd, uintptr(unsafe.Pointer(&status)))
+	if err != nil {
+		return false, err
+	}
+	if status&unix.TIOCM_RTS > 0 {
+		return true, nil
+	}
+	return false, nil
+}
+
+// SetRTS sets the status of the RTS line of a port to the given state,
+func (p *Port) SetRTS(state bool) error {
+	var command int
+	flag := unix.TIOCM_RTS
+	if state {
+		command = unix.TIOCMBIS
+	} else {
+		command = unix.TIOCMBIC
+	}
+	err := ioctl(command, p.fd, uintptr(unsafe.Pointer(&flag)))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 // NewPort creates and returns a new Port struct using the given os.File pointer
 func NewPort(f *os.File, fd uintptr, options OpenOptions) *Port {
 	return &Port{f, fd, options.PortName}
