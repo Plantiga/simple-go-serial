@@ -32,11 +32,14 @@ func (p *Port) Close() error {
 	return p.f.Close()
 }
 
+// var FIONREAD = 0x541B
+var TIOCINQ = 0x4004667f
+
 // InWaiting returns the number of waiting bytes in the Port's internal buffer.
 func (p *Port) InWaiting() (int, error) {
 	// Funky time
 	var waiting int
-	err := ioctl(unix.TIOCINQ, p.fd, uintptr(unsafe.Pointer(&waiting)))
+	err := ioctl(TIOCINQ, p.fd, uintptr(unsafe.Pointer(&waiting)))
 	if err != nil {
 		return 0, err
 	}
@@ -68,6 +71,20 @@ func (p *Port) DTR() (bool, error) {
 	return false, nil
 }
 
+// RTS
+// See: https://en.wikipedia.org/wiki/Data_Terminal_Ready
+func (p *Port) RTS() (bool, error) {
+	var status int
+	err := ioctl(unix.TIOCMGET, p.fd, uintptr(unsafe.Pointer(&status)))
+	if err != nil {
+		return false, err
+	}
+	if status&unix.TIOCM_RTS > 0 {
+		return true, nil
+	}
+	return false, nil
+}
+
 // SetDTR sets the status of the DTR line of a port to the given state,
 // allowing manual control of the Data Terminal Ready modem line.
 func (p *Port) SetDTR(state bool) error {
@@ -83,20 +100,6 @@ func (p *Port) SetDTR(state bool) error {
 		return err
 	}
 	return nil
-}
-
-// RTS
-// See: https://en.wikipedia.org/wiki/Data_Terminal_Ready
-func (p *Port) RTS() (bool, error) {
-	var status int
-	err := ioctl(unix.TIOCMGET, p.fd, uintptr(unsafe.Pointer(&status)))
-	if err != nil {
-		return false, err
-	}
-	if status&unix.TIOCM_RTS > 0 {
-		return true, nil
-	}
-	return false, nil
 }
 
 // SetRTS sets the status of the RTS line of a port to the given state,
