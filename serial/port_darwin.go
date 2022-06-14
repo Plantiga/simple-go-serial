@@ -46,6 +46,16 @@ func (p *Port) InWaiting() (int, error) {
 	return waiting, nil
 }
 
+var TCFLSH = 0x540b
+
+func (p *Port) ResetInputBuffer() error {
+	return ioctl(TCFLSH, p.fd, unix.TCIFLUSH)
+}
+
+func (p *Port) ResetOutputBuffer() error {
+	return ioctl(TCFLSH, p.fd, unix.TCOFLUSH)
+}
+
 // SetDeadline sets the read and write deadlines for the Port's file.
 // Deadlines are absolute timeouts after which any read or write calls will fail with a timeout error.
 func (p *Port) SetDeadline(t time.Time) error {
