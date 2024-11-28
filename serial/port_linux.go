@@ -123,6 +123,18 @@ func (p *Port) SetRTS(state bool) error {
 	return nil
 }
 
+func (p *Port) DCD() (bool, error) {
+	var status int
+	err := ioctl(unix.TIOCMGET, p.fd, uintptr(unsafe.Pointer(&status)))
+	if err != nil {
+		return false, err
+	}
+	if status&unix.TIOCM_CD > 0 {
+		return true, nil
+	}
+	return false, nil
+}
+
 // NewPort creates and returns a new Port struct using the given os.File pointer
 func NewPort(f *os.File, fd uintptr, options OpenOptions) *Port {
 	return &Port{f, fd, options.PortName}

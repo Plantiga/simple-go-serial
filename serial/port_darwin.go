@@ -46,14 +46,16 @@ func (p *Port) InWaiting() (int, error) {
 	return waiting, nil
 }
 
-var TCFLSH = 0x540b
+var TCFLSH = 0x80047410
 
 func (p *Port) ResetInputBuffer() error {
-	return ioctl(TCFLSH, p.fd, unix.TCIFLUSH)
+	flush := unix.TCIFLUSH
+	return ioctl(TCFLSH, p.fd, uintptr(unsafe.Pointer(&flush)))
 }
 
 func (p *Port) ResetOutputBuffer() error {
-	return ioctl(TCFLSH, p.fd, unix.TCOFLUSH)
+	flush := unix.TCOFLUSH
+	return ioctl(TCFLSH, p.fd, uintptr(unsafe.Pointer(&flush)))
 }
 
 // SetDeadline sets the read and write deadlines for the Port's file.
@@ -126,6 +128,18 @@ func (p *Port) SetRTS(state bool) error {
 		return err
 	}
 	return nil
+}
+
+func (p *Port) DCD() (bool, error) {
+	var status int
+	err := ioctl(unix.TIOCMGET, p.fd, uintptr(unsafe.Pointer(&status)))
+	if err != nil {
+		return false, err
+	}
+	if status&unix.TIOCM_CD > 0 {
+		return true, nil
+	}
+	return false, nil
 }
 
 // NewPort creates and returns a new Port struct using the given os.File pointer
