@@ -5,6 +5,7 @@ import (
 	"time"
 	"unsafe"
 
+	"braces.dev/errtrace"
 	"golang.org/x/sys/unix"
 )
 
@@ -18,18 +19,18 @@ type Port struct {
 // Read reads up to len(b) bytes from the Port's file.
 // It will return the number of bytes read and an error, if any
 func (p *Port) Read(b []byte) (int, error) {
-	return p.f.Read(b)
+	return errtrace.Wrap2(p.f.Read(b))
 }
 
 // Write writes len(b) number of bytes to the Port's file.
 // It will return the number of bytes written and an error, if any
 func (p *Port) Write(b []byte) (int, error) {
-	return p.f.Write(b)
+	return errtrace.Wrap2(p.f.Write(b))
 }
 
 // Close closes the Port's file, making it unusable for I/O
 func (p *Port) Close() error {
-	return p.f.Close()
+	return errtrace.Wrap(p.f.Close())
 }
 
 // InWaiting returns the number of waiting bytes in the Port's internal buffer.
@@ -38,17 +39,17 @@ func (p *Port) InWaiting() (int, error) {
 	var waiting int
 	err := ioctl(unix.TIOCINQ, p.fd, uintptr(unsafe.Pointer(&waiting)))
 	if err != nil {
-		return 0, err
+		return 0, errtrace.Wrap(err)
 	}
 	return waiting, nil
 }
 
 func (p *Port) ResetInputBuffer() error {
-	return ioctl(unix.TCFLSH, p.fd, unix.TCIFLUSH)
+	return errtrace.Wrap(ioctl(unix.TCFLSH, p.fd, unix.TCIFLUSH))
 }
 
 func (p *Port) ResetOutputBuffer() error {
-	return ioctl(unix.TCFLSH, p.fd, unix.TCOFLUSH)
+	return errtrace.Wrap(ioctl(unix.TCFLSH, p.fd, unix.TCOFLUSH))
 }
 
 // SetDeadline sets the read and write deadlines for the Port's file.
@@ -57,7 +58,7 @@ func (p *Port) SetDeadline(t time.Time) error {
 	// Funky Town
 	err := p.f.SetDeadline(t)
 	if err != nil {
-		return err
+		return errtrace.Wrap(err)
 	}
 	return nil
 }
@@ -68,7 +69,7 @@ func (p *Port) DTR() (bool, error) {
 	var status int
 	err := ioctl(unix.TIOCMGET, p.fd, uintptr(unsafe.Pointer(&status)))
 	if err != nil {
-		return false, err
+		return false, errtrace.Wrap(err)
 	}
 	if status&unix.TIOCM_DTR > 0 {
 		return true, nil
@@ -88,7 +89,7 @@ func (p *Port) SetDTR(state bool) error {
 	}
 	err := ioctl(command, p.fd, uintptr(unsafe.Pointer(&dtrFlag)))
 	if err != nil {
-		return err
+		return errtrace.Wrap(err)
 	}
 	return nil
 }
@@ -99,7 +100,7 @@ func (p *Port) RTS() (bool, error) {
 	var status int
 	err := ioctl(unix.TIOCMGET, p.fd, uintptr(unsafe.Pointer(&status)))
 	if err != nil {
-		return false, err
+		return false, errtrace.Wrap(err)
 	}
 	if status&unix.TIOCM_RTS > 0 {
 		return true, nil
@@ -118,7 +119,7 @@ func (p *Port) SetRTS(state bool) error {
 	}
 	err := ioctl(command, p.fd, uintptr(unsafe.Pointer(&flag)))
 	if err != nil {
-		return err
+		return errtrace.Wrap(err)
 	}
 	return nil
 }
@@ -127,7 +128,7 @@ func (p *Port) DCD() (bool, error) {
 	var status int
 	err := ioctl(unix.TIOCMGET, p.fd, uintptr(unsafe.Pointer(&status)))
 	if err != nil {
-		return false, err
+		return false, errtrace.Wrap(err)
 	}
 	if status&unix.TIOCM_CD > 0 {
 		return true, nil
