@@ -5,6 +5,7 @@ import (
 	"os"
 	"unsafe"
 
+	"braces.dev/errtrace"
 	"golang.org/x/sys/unix"
 )
 
@@ -39,11 +40,11 @@ func makeTermios2(options OpenOptions) (*termios2, error) {
 	vmin := options.MinimumReadSize
 
 	if vmin == 0 && vtime < 100 {
-		return nil, errors.New("invalid values for InterCharacterTimeout and MinimumReadSize")
+		return nil, errtrace.Wrap(errors.New("invalid values for InterCharacterTimeout and MinimumReadSize"))
 	}
 
 	if vtime > 25500 {
-		return nil, errors.New("invalid value for InterCharacterTimeout")
+		return nil, errtrace.Wrap(errors.New("invalid value for InterCharacterTimeout"))
 	}
 
 	ccOpts := [nccs]cc_t{}
@@ -74,7 +75,7 @@ func makeTermios2(options OpenOptions) (*termios2, error) {
 		t2.c_cflag |= unix.CSTOPB
 
 	default:
-		return nil, errors.New("invalid setting for StopBits")
+		return nil, errtrace.Wrap(errors.New("invalid setting for StopBits"))
 	}
 
 	// If odd or even, enable parity generation (PARENB) and determine the type
@@ -88,7 +89,7 @@ func makeTermios2(options OpenOptions) (*termios2, error) {
 		t2.c_cflag |= unix.PARENB
 
 	default:
-		return nil, errors.New("invalid setting for ParityMode")
+		return nil, errtrace.Wrap(errors.New("invalid setting for ParityMode"))
 	}
 
 	// Choose the databits per frame
@@ -102,7 +103,7 @@ func makeTermios2(options OpenOptions) (*termios2, error) {
 	case 8:
 		t2.c_cflag |= unix.CS8
 	default:
-		return nil, errors.New("invalid setting for DataBits")
+		return nil, errtrace.Wrap(errors.New("invalid setting for DataBits"))
 	}
 
 	return t2, nil
@@ -120,7 +121,7 @@ func openInternal(options OpenOptions) (*Port, error) {
 			unix.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK,
 			0777)
 	if openErr != nil {
-		return nil, openErr
+		return nil, errtrace.Wrap(openErr)
 	}
 
 	fd := file.Fd()
@@ -129,18 +130,18 @@ func openInternal(options OpenOptions) (*Port, error) {
 	// Let's unset the blocking flag and save the pointer for later.
 	nonblockErr := unix.SetNonblock(int(fd), true)
 	if nonblockErr != nil {
-		return nil, nonblockErr
+		return nil, errtrace.Wrap(nonblockErr)
 	}
 
 	t2, optErr := makeTermios2(options)
 	if optErr != nil {
-		return nil, optErr
+		return nil, errtrace.Wrap(optErr)
 	}
 
 	// Set our termios2 struct as the file descriptor's settings
 	errno := ioctl(unix.TCSETS2, fd, uintptr(unsafe.Pointer(t2)))
 	if errno != nil {
-		return nil, errno
+		return nil, errtrace.Wrap(errno)
 	}
 
 	return NewPort(file, fd, options), nil

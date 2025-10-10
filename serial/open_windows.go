@@ -17,6 +17,7 @@
 package serial
 
 import (
+	"braces.dev/errtrace"
 	"os"
 	"syscall"
 	"unsafe"
@@ -52,7 +53,7 @@ func openInternal(options OpenOptions) (*Port, error) {
 		syscall.FILE_ATTRIBUTE_NORMAL|syscall.FILE_FLAG_OVERLAPPED,
 		0)
 	if err != nil {
-		return nil, err
+		return nil, errtrace.Wrap(err)
 	}
 	f := os.NewFile(uintptr(h), options.PortName)
 	defer func() {
@@ -62,25 +63,25 @@ func openInternal(options OpenOptions) (*Port, error) {
 	}()
 
 	if err = setCommState(h, options); err != nil {
-		return nil, err
+		return nil, errtrace.Wrap(err)
 	}
 	if err = setupComm(h, 64, 64); err != nil {
-		return nil, err
+		return nil, errtrace.Wrap(err)
 	}
 	if err = setCommTimeouts(h, options); err != nil {
-		return nil, err
+		return nil, errtrace.Wrap(err)
 	}
 	if err = setCommMask(h); err != nil {
-		return nil, err
+		return nil, errtrace.Wrap(err)
 	}
 
 	ro, err := newOverlapped()
 	if err != nil {
-		return nil, err
+		return nil, errtrace.Wrap(err)
 	}
 	wo, err := newOverlapped()
 	if err != nil {
-		return nil, err
+		return nil, errtrace.Wrap(err)
 	}
 	port := new(Port)
 	port.f = f
@@ -153,7 +154,7 @@ func setCommState(h syscall.Handle, options OpenOptions) error {
 
 	r, _, err := syscall.Syscall(nSetCommState, 2, uintptr(h), uintptr(unsafe.Pointer(&params)), 0)
 	if r == 0 {
-		return err
+		return errtrace.Wrap(err)
 	}
 	return nil
 }
@@ -220,7 +221,7 @@ func setCommTimeouts(h syscall.Handle, options OpenOptions) error {
 
 	r, _, err := syscall.Syscall(nSetCommTimeouts, 2, uintptr(h), uintptr(unsafe.Pointer(&timeouts)), 0)
 	if r == 0 {
-		return err
+		return errtrace.Wrap(err)
 	}
 	return nil
 }
@@ -228,7 +229,7 @@ func setCommTimeouts(h syscall.Handle, options OpenOptions) error {
 func setupComm(h syscall.Handle, in, out int) error {
 	r, _, err := syscall.Syscall(nSetupComm, 3, uintptr(h), uintptr(in), uintptr(out))
 	if r == 0 {
-		return err
+		return errtrace.Wrap(err)
 	}
 	return nil
 }
@@ -237,7 +238,7 @@ func setCommMask(h syscall.Handle) error {
 	const EV_RXCHAR = 0x0001
 	r, _, err := syscall.Syscall(nSetCommMask, 2, uintptr(h), EV_RXCHAR, 0)
 	if r == 0 {
-		return err
+		return errtrace.Wrap(err)
 	}
 	return nil
 }
@@ -246,7 +247,7 @@ func newOverlapped() (*syscall.Overlapped, error) {
 	var overlapped syscall.Overlapped
 	r, _, err := syscall.Syscall6(nCreateEvent, 4, 0, 1, 0, 0, 0, 0)
 	if r == 0 {
-		return nil, err
+		return nil, errtrace.Wrap(err)
 	}
 	overlapped.HEvent = syscall.Handle(r)
 	return &overlapped, nil

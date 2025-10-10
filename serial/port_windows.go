@@ -3,6 +3,7 @@
 package serial
 
 import (
+	"braces.dev/errtrace"
 	"fmt"
 	"os"
 	"sync"
@@ -22,21 +23,21 @@ type Port struct {
 
 func (p *Port) Read(buf []byte) (int, error) {
 	if p == nil || p.f == nil {
-		return 0, fmt.Errorf("Invalid port on read %v %v", p, p.f)
+		return 0, errtrace.Wrap(fmt.Errorf("Invalid port on read %v %v", p, p.f))
 	}
 
 	p.rl.Lock()
 	defer p.rl.Unlock()
 
 	if err := resetEvent(p.ro.HEvent); err != nil {
-		return 0, err
+		return 0, errtrace.Wrap(err)
 	}
 	var done uint32
 	err := syscall.ReadFile(p.fd, buf, &done, p.ro)
 	if err != nil && err != syscall.ERROR_IO_PENDING {
-		return int(done), err
+		return int(done), errtrace.Wrap(err)
 	}
-	return getOverlappedResult(p.fd, p.ro)
+	return errtrace.Wrap2(getOverlappedResult(p.fd, p.ro))
 }
 
 func (p *Port) Write(buf []byte) (int, error) {
@@ -44,18 +45,18 @@ func (p *Port) Write(buf []byte) (int, error) {
 	defer p.wl.Unlock()
 
 	if err := resetEvent(p.wo.HEvent); err != nil {
-		return 0, err
+		return 0, errtrace.Wrap(err)
 	}
 	var n uint32
 	err := syscall.WriteFile(p.fd, buf, &n, p.wo)
 	if err != nil && err != syscall.ERROR_IO_PENDING {
-		return int(n), err
+		return int(n), errtrace.Wrap(err)
 	}
-	return getOverlappedResult(p.fd, p.wo)
+	return errtrace.Wrap2(getOverlappedResult(p.fd, p.wo))
 }
 
 func (p *Port) Close() error {
-	return p.f.Close()
+	return errtrace.Wrap(p.f.Close())
 }
 
 func (p *Port) InWaiting() (int, error) {
@@ -69,7 +70,7 @@ func (p *Port) SetDeadline(time.Time) error {
 func resetEvent(h syscall.Handle) error {
 	r, _, err := syscall.Syscall(nResetEvent, 1, uintptr(h), 0, 0)
 	if r == 0 {
-		return err
+		return errtrace.Wrap(err)
 	}
 	return nil
 }
@@ -81,7 +82,7 @@ func getOverlappedResult(h syscall.Handle, overlapped *syscall.Overlapped) (int,
 		uintptr(unsafe.Pointer(overlapped)),
 		uintptr(unsafe.Pointer(&n)), 1, 0, 0)
 	if r == 0 {
-		return n, err
+		return n, errtrace.Wrap(err)
 	}
 
 	return n, nil

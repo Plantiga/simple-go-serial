@@ -6,6 +6,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	"braces.dev/errtrace"
 	"golang.org/x/sys/unix"
 )
 
@@ -24,7 +25,7 @@ func makeTermios(fd uintptr, options OpenOptions) (*unix.Termios, error) {
 	err := unix.IoctlSetTermios(int(fd), unix.TIOCGETA, t)
 	if err != nil {
 		fmt.Println("TCGETS openInternal err")
-		return nil, err
+		return nil, errtrace.Wrap(err)
 	}
 
 	t.Cflag |= (syscall.CLOCAL | syscall.CREAD)
@@ -75,7 +76,7 @@ func openInternal(options OpenOptions) (*Port, error) {
 			unix.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK,
 			0777)
 	if openErr != nil {
-		return nil, openErr
+		return nil, errtrace.Wrap(openErr)
 	}
 
 	fd := file.Fd()
@@ -84,23 +85,23 @@ func openInternal(options OpenOptions) (*Port, error) {
 	// Let's unset the blocking flag and save the pointer for later.
 	nonblockErr := unix.SetNonblock(int(fd), true)
 	if nonblockErr != nil {
-		return nil, nonblockErr
+		return nil, errtrace.Wrap(nonblockErr)
 	}
 
 	t, optErr := makeTermios(fd, options)
 	if optErr != nil {
-		return nil, optErr
+		return nil, errtrace.Wrap(optErr)
 	}
 
 	// Set our termios struct as the file descriptor's settings
 	err := unix.IoctlSetTermios(int(fd), unix.TIOCSETA, t)
 	if err != nil {
-		return nil, err
+		return nil, errtrace.Wrap(err)
 	}
 	b := uint(options.BaudRate)
 	errcode := ioctl(IOSSIOSPEED, fd, uintptr(unsafe.Pointer(&b)))
 	if errcode != nil {
-		return nil, errcode
+		return nil, errtrace.Wrap(errcode)
 	}
 
 	return NewPort(file, fd, options), nil

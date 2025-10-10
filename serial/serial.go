@@ -21,6 +21,7 @@
 package serial
 
 import (
+	"braces.dev/errtrace"
 	"math"
 )
 
@@ -80,7 +81,7 @@ type OpenOptions struct {
 // Open creates an io.ReadWriteCloser based on the supplied options struct.
 func Open(options OpenOptions) (*Port, error) {
 	// Redirect to the OS-specific function.
-	return openInternal(options)
+	return errtrace.Wrap2(openInternal(options))
 }
 
 // Rounds a float to the nearest integer.
