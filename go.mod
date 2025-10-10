@@ -4,5 +4,5 @@ go 1.24
 
 require (
 	braces.dev/errtrace v0.4.0
-	golang.org/x/sys v0.27.0
+	golang.org/x/sys v0.32.0
 )
