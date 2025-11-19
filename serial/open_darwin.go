@@ -70,38 +70,43 @@ func openInternal(options OpenOptions) (*Port, error) {
 	// RDWR     : read/write
 	// NOCTTY   : don't allow the port to become the controlling terminal
 	// NONBLOCK : open with nonblocking so we don't stall
-	file, openErr :=
+	file, err :=
 		os.OpenFile(
 			options.PortName,
 			unix.O_RDWR|unix.O_NOCTTY|unix.O_NONBLOCK,
 			0777)
-	if openErr != nil {
-		return nil, errtrace.Wrap(openErr)
+	if err != nil {
+		return nil, errtrace.Wrap(err)
 	}
+	defer func() {
+		if err != nil {
+			file.Close()
+		}
+	}()
 
 	fd := file.Fd()
 
 	// When we call Fd(), we make the file descriptor blocking, which we don't want
 	// Let's unset the blocking flag and save the pointer for later.
-	nonblockErr := unix.SetNonblock(int(fd), true)
-	if nonblockErr != nil {
-		return nil, errtrace.Wrap(nonblockErr)
+	err = unix.SetNonblock(int(fd), true)
+	if err != nil {
+		return nil, errtrace.Wrap(err)
 	}
 
-	t, optErr := makeTermios(fd, options)
-	if optErr != nil {
-		return nil, errtrace.Wrap(optErr)
+	t, err := makeTermios(fd, options)
+	if err != nil {
+		return nil, errtrace.Wrap(err)
 	}
 
 	// Set our termios struct as the file descriptor's settings
-	err := unix.IoctlSetTermios(int(fd), unix.TIOCSETA, t)
+	err = unix.IoctlSetTermios(int(fd), unix.TIOCSETA, t)
 	if err != nil {
 		return nil, errtrace.Wrap(err)
 	}
 	b := uint(options.BaudRate)
-	errcode := ioctl(IOSSIOSPEED, fd, uintptr(unsafe.Pointer(&b)))
-	if errcode != nil {
-		return nil, errtrace.Wrap(errcode)
+	err = ioctl(IOSSIOSPEED, fd, uintptr(unsafe.Pointer(&b)))
+	if err != nil {
+		return nil, errtrace.Wrap(err)
 	}
 
 	return NewPort(file, fd, options), nil
