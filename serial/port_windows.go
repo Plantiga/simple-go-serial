@@ -13,12 +13,13 @@ import (
 )
 
 type Port struct {
-	f  *os.File
-	fd syscall.Handle
-	rl sync.Mutex
-	wl sync.Mutex
-	ro *syscall.Overlapped
-	wo *syscall.Overlapped
+	f          *os.File
+	fd         syscall.Handle
+	rl         sync.Mutex
+	wl         sync.Mutex
+	ro         *syscall.Overlapped
+	wo         *syscall.Overlapped
+	DeviceName string
 }
 
 func (p *Port) Read(buf []byte) (int, error) {
@@ -61,6 +62,78 @@ func (p *Port) Close() error {
 
 func (p *Port) InWaiting() (int, error) {
 	return 0, nil
+}
+
+// PurgeComm flags
+const (
+	purgeTxClear = 0x0004
+	purgeRxClear = 0x0008
+)
+
+// EscapeCommFunction codes
+const (
+	escapeSetRTS = 3
+	escapeClrRTS = 4
+	escapeSetDTR = 5
+	escapeClrDTR = 6
+)
+
+// GetCommModemStatus bits
+const msRLSDOn = 0x0080 // DCD (receive-line-signal-detect)
+
+// ResetInputBuffer discards data received but not yet read (tcflush TCIFLUSH).
+func (p *Port) ResetInputBuffer() error {
+	return errtrace.Wrap(purgeComm(p.fd, purgeRxClear))
+}
+
+// ResetOutputBuffer discards data written but not yet transmitted (tcflush TCOFLUSH).
+func (p *Port) ResetOutputBuffer() error {
+	return errtrace.Wrap(purgeComm(p.fd, purgeTxClear))
+}
+
+// SetDTR sets the status of the DTR line of a port to the given state,
+// allowing manual control of the Data Terminal Ready modem line.
+func (p *Port) SetDTR(state bool) error {
+	code := escapeClrDTR
+	if state {
+		code = escapeSetDTR
+	}
+	return errtrace.Wrap(escapeCommFunction(p.fd, code))
+}
+
+// SetRTS sets the status of the RTS line of a port to the given state.
+func (p *Port) SetRTS(state bool) error {
+	code := escapeClrRTS
+	if state {
+		code = escapeSetRTS
+	}
+	return errtrace.Wrap(escapeCommFunction(p.fd, code))
+}
+
+// DCD returns the status of the Data Carrier Detect line of the port.
+func (p *Port) DCD() (bool, error) {
+	var status uint32
+	r, _, err := syscall.Syscall(nGetCommModemStatus, 2, uintptr(p.fd), uintptr(unsafe.Pointer(&status)), 0)
+	if r == 0 {
+		return false, errtrace.Wrap(err)
+	}
+	return status&msRLSDOn > 0, nil
+}
+
+func purgeComm(h syscall.Handle, flags uint32) error {
+	r, _, err := syscall.Syscall(nPurgeComm, 2, uintptr(h), uintptr(flags), 0)
+	if r == 0 {
+		return errtrace.Wrap(err)
+	}
+	return nil
+}
+
+func escapeCommFunction(h syscall.Handle, code int) error {
+	r, _, err := syscall.Syscall(nEscapeCommFunction, 2, uintptr(h), uintptr(code), 0)
+	if r == 0 {
+		return errtrace.Wrap(err)
+	}
+	return nil
 }
 
 func (p *Port) SetDeadline(time.Time) error {
