@@ -88,6 +88,7 @@ func openInternal(options OpenOptions) (*Port, error) {
 	port.fd = h
 	port.ro = ro
 	port.wo = wo
+	port.DeviceName = options.PortName
 
 	return port, nil
 }
@@ -99,7 +100,10 @@ var (
 	nSetupComm,
 	nGetOverlappedResult,
 	nCreateEvent,
-	nResetEvent uintptr
+	nResetEvent,
+	nPurgeComm,
+	nEscapeCommFunction,
+	nGetCommModemStatus uintptr
 )
 
 func init() {
@@ -116,6 +120,9 @@ func init() {
 	nGetOverlappedResult = getProcAddr(k32, "GetOverlappedResult")
 	nCreateEvent = getProcAddr(k32, "CreateEventW")
 	nResetEvent = getProcAddr(k32, "ResetEvent")
+	nPurgeComm = getProcAddr(k32, "PurgeComm")
+	nEscapeCommFunction = getProcAddr(k32, "EscapeCommFunction")
+	nGetCommModemStatus = getProcAddr(k32, "GetCommModemStatus")
 }
 
 func getProcAddr(lib syscall.Handle, name string) uintptr {
@@ -146,11 +153,6 @@ func setCommState(h syscall.Handle, options OpenOptions) error {
 
 	params.BaudRate = uint32(options.BaudRate)
 	params.ByteSize = byte(options.DataBits)
-
-	if options.RTSCTSFlowControl {
-		params.flags[0] |= 0x04 // fOutxCtsFlow = 0x1
-		params.flags[1] |= 0x20 // fRtsControl = RTS_CONTROL_HANDSHAKE (0x2)
-	}
 
 	r, _, err := syscall.Syscall(nSetCommState, 2, uintptr(h), uintptr(unsafe.Pointer(&params)), 0)
 	if r == 0 {

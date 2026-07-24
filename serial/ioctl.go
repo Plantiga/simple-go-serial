@@ -1,3 +1,5 @@
+//go:build !windows
+
 package serial
 
 import "golang.org/x/sys/unix"
