@@ -89,6 +89,9 @@ func openInternal(options OpenOptions) (*Port, error) {
 	port.ro = ro
 	port.wo = wo
 	port.DeviceName = options.PortName
+	// Both lines are enabled in the DCB by setCommState.
+	port.dtr = true
+	port.rts = true
 
 	return port, nil
 }
@@ -138,7 +141,10 @@ func setCommState(h syscall.Handle, options OpenOptions) error {
 	params.DCBlength = uint32(unsafe.Sizeof(params))
 
 	params.flags[0] = 0x01  // fBinary
-	params.flags[0] |= 0x10 // Assert DSR
+	params.flags[0] |= 0x10 // fDtrControl = DTR_CONTROL_ENABLE (0x1)
+	// POSIX asserts both modem lines when a tty is opened; match that here,
+	// devices (e.g. Plantiga docks) key off the host raising them.
+	params.flags[1] |= 0x10 // fRtsControl = RTS_CONTROL_ENABLE (0x1)
 
 	if options.ParityMode != Parity_None {
 		params.flags[0] |= 0x03 // fParity
