@@ -64,8 +64,30 @@ func (p *Port) Close() error {
 	return errtrace.Wrap(p.f.Close())
 }
 
+// comstat mirrors the Win32 COMSTAT struct. The first DWORD packs a set of
+// status bit-fields (fCtsHold, fDsrHold, …); the fields we care about are the
+// two queue depths that follow.
+type comstat struct {
+	flags    uint32
+	cbInQue  uint32
+	cbOutQue uint32
+}
+
+// InWaiting returns the number of bytes sitting in the driver's receive queue,
+// matching the POSIX TIOCINQ semantics used on the other platforms. Without
+// this the buffering read loop falls back to one-byte reads and cannot drain a
+// fast stream before the driver's RX buffer overruns.
 func (p *Port) InWaiting() (int, error) {
-	return 0, nil
+	var errs uint32
+	var stat comstat
+	r, _, err := syscall.Syscall(nClearCommError, 3,
+		uintptr(p.fd),
+		uintptr(unsafe.Pointer(&errs)),
+		uintptr(unsafe.Pointer(&stat)))
+	if r == 0 {
+		return 0, errtrace.Wrap(err)
+	}
+	return int(stat.cbInQue), nil
 }
 
 // PurgeComm flags

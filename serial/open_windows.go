@@ -65,7 +65,11 @@ func openInternal(options OpenOptions) (*Port, error) {
 	if err = setCommState(h, options); err != nil {
 		return nil, errtrace.Wrap(err)
 	}
-	if err = setupComm(h, 64, 64); err != nil {
+	// Recommend generous driver-side queues. At high baud rates (the Plantiga
+	// dock runs at 3 Mbps) a large burst can arrive faster than user space
+	// drains it; a 64-byte RX buffer (the old value) overruns almost instantly
+	// and silently drops bytes, corrupting framing downstream.
+	if err = setupComm(h, 65536, 65536); err != nil {
 		return nil, errtrace.Wrap(err)
 	}
 	if err = setCommTimeouts(h, options); err != nil {
@@ -106,7 +110,8 @@ var (
 	nResetEvent,
 	nPurgeComm,
 	nEscapeCommFunction,
-	nGetCommModemStatus uintptr
+	nGetCommModemStatus,
+	nClearCommError uintptr
 )
 
 func init() {
@@ -126,6 +131,7 @@ func init() {
 	nPurgeComm = getProcAddr(k32, "PurgeComm")
 	nEscapeCommFunction = getProcAddr(k32, "EscapeCommFunction")
 	nGetCommModemStatus = getProcAddr(k32, "GetCommModemStatus")
+	nClearCommError = getProcAddr(k32, "ClearCommError")
 }
 
 func getProcAddr(lib syscall.Handle, name string) uintptr {
