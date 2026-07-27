@@ -20,6 +20,10 @@ type Port struct {
 	ro         *syscall.Overlapped
 	wo         *syscall.Overlapped
 	DeviceName string
+	// Windows can only query the input modem lines (CTS/DSR/RING/DCD), so
+	// the output lines are tracked as last-commanded state instead.
+	dtr bool
+	rts bool
 }
 
 func (p *Port) Read(buf []byte) (int, error) {
@@ -60,8 +64,30 @@ func (p *Port) Close() error {
 	return errtrace.Wrap(p.f.Close())
 }
 
+// comstat mirrors the Win32 COMSTAT struct. The first DWORD packs a set of
+// status bit-fields (fCtsHold, fDsrHold, …); the fields we care about are the
+// two queue depths that follow.
+type comstat struct {
+	flags    uint32
+	cbInQue  uint32
+	cbOutQue uint32
+}
+
+// InWaiting returns the number of bytes sitting in the driver's receive queue,
+// matching the POSIX TIOCINQ semantics used on the other platforms. Without
+// this the buffering read loop falls back to one-byte reads and cannot drain a
+// fast stream before the driver's RX buffer overruns.
 func (p *Port) InWaiting() (int, error) {
-	return 0, nil
+	var errs uint32
+	var stat comstat
+	r, _, err := syscall.Syscall(nClearCommError, 3,
+		uintptr(p.fd),
+		uintptr(unsafe.Pointer(&errs)),
+		uintptr(unsafe.Pointer(&stat)))
+	if r == 0 {
+		return 0, errtrace.Wrap(err)
+	}
+	return int(stat.cbInQue), nil
 }
 
 // PurgeComm flags
@@ -98,7 +124,11 @@ func (p *Port) SetDTR(state bool) error {
 	if state {
 		code = escapeSetDTR
 	}
-	return errtrace.Wrap(escapeCommFunction(p.fd, code))
+	if err := escapeCommFunction(p.fd, code); err != nil {
+		return errtrace.Wrap(err)
+	}
+	p.dtr = state
+	return nil
 }
 
 // SetRTS sets the status of the RTS line of a port to the given state.
@@ -107,7 +137,23 @@ func (p *Port) SetRTS(state bool) error {
 	if state {
 		code = escapeSetRTS
 	}
-	return errtrace.Wrap(escapeCommFunction(p.fd, code))
+	if err := escapeCommFunction(p.fd, code); err != nil {
+		return errtrace.Wrap(err)
+	}
+	p.rts = state
+	return nil
+}
+
+// DTR returns the last state the DTR line was commanded to; Windows offers
+// no way to read the line back.
+func (p *Port) DTR() (bool, error) {
+	return p.dtr, nil
+}
+
+// RTS returns the last state the RTS line was commanded to; Windows offers
+// no way to read the line back.
+func (p *Port) RTS() (bool, error) {
+	return p.rts, nil
 }
 
 // DCD returns the status of the Data Carrier Detect line of the port.
