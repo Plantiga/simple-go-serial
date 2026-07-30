@@ -24,6 +24,9 @@ type Port struct {
 	// the output lines are tracked as last-commanded state instead.
 	dtr bool
 	rts bool
+	// guarded by rl+wl; makes Close idempotent so the event handles can't
+	// be double-closed (a second CloseHandle could hit a recycled handle).
+	closed bool
 }
 
 func (p *Port) Read(buf []byte) (int, error) {
@@ -33,6 +36,12 @@ func (p *Port) Read(buf []byte) (int, error) {
 
 	p.rl.Lock()
 	defer p.rl.Unlock()
+
+	// After Close the fd and event handle values may have been recycled by
+	// the OS; they must not reach any Windows API.
+	if p.closed {
+		return 0, errtrace.Wrap(os.ErrClosed)
+	}
 
 	if err := resetEvent(p.ro.HEvent); err != nil {
 		return 0, errtrace.Wrap(err)
@@ -49,6 +58,12 @@ func (p *Port) Write(buf []byte) (int, error) {
 	p.wl.Lock()
 	defer p.wl.Unlock()
 
+	// After Close the fd and event handle values may have been recycled by
+	// the OS; they must not reach any Windows API.
+	if p.closed {
+		return 0, errtrace.Wrap(os.ErrClosed)
+	}
+
 	if err := resetEvent(p.wo.HEvent); err != nil {
 		return 0, errtrace.Wrap(err)
 	}
@@ -61,7 +76,28 @@ func (p *Port) Write(buf []byte) (int, error) {
 }
 
 func (p *Port) Close() error {
-	return errtrace.Wrap(p.f.Close())
+	// Take both IO locks so the event handles aren't closed out from under
+	// an in-flight overlapped operation; reads and writes complete within
+	// the configured comm timeouts, so the locks settle quickly.
+	p.rl.Lock()
+	defer p.rl.Unlock()
+	p.wl.Lock()
+	defer p.wl.Unlock()
+	if p.closed {
+		return nil
+	}
+	p.closed = true
+
+	err := p.f.Close()
+	// The event handles created by newOverlapped are owned by the port and
+	// are not released by closing the file.
+	if closeErr := syscall.CloseHandle(p.ro.HEvent); err == nil {
+		err = closeErr
+	}
+	if closeErr := syscall.CloseHandle(p.wo.HEvent); err == nil {
+		err = closeErr
+	}
+	return errtrace.Wrap(err)
 }
 
 // comstat mirrors the Win32 COMSTAT struct. The first DWORD packs a set of

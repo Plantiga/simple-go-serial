@@ -85,6 +85,7 @@ func openInternal(options OpenOptions) (*Port, error) {
 	}
 	wo, err := newOverlapped()
 	if err != nil {
+		syscall.CloseHandle(ro.HEvent)
 		return nil, errtrace.Wrap(err)
 	}
 	port := new(Port)
