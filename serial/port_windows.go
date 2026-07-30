@@ -37,6 +37,12 @@ func (p *Port) Read(buf []byte) (int, error) {
 	p.rl.Lock()
 	defer p.rl.Unlock()
 
+	// After Close the fd and event handle values may have been recycled by
+	// the OS; they must not reach any Windows API.
+	if p.closed {
+		return 0, errtrace.Wrap(os.ErrClosed)
+	}
+
 	if err := resetEvent(p.ro.HEvent); err != nil {
 		return 0, errtrace.Wrap(err)
 	}
@@ -51,6 +57,12 @@ func (p *Port) Read(buf []byte) (int, error) {
 func (p *Port) Write(buf []byte) (int, error) {
 	p.wl.Lock()
 	defer p.wl.Unlock()
+
+	// After Close the fd and event handle values may have been recycled by
+	// the OS; they must not reach any Windows API.
+	if p.closed {
+		return 0, errtrace.Wrap(os.ErrClosed)
+	}
 
 	if err := resetEvent(p.wo.HEvent); err != nil {
 		return 0, errtrace.Wrap(err)
