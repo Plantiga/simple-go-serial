@@ -194,6 +194,10 @@ func setCommTimeouts(h syscall.Handle, options OpenOptions) error {
 		// VMIN > 0: block until data arrives, however long that takes
 		// (MAXDWORD-1 ms is ~49 days). A Read under a deadline is cut off
 		// by CancelIoEx in waitOverlapped, not by the driver.
+		//
+		// COMMTIMEOUTS cannot enforce a minimum byte count: ReadFile
+		// returns as soon as any byte is buffered, so a MinimumReadSize
+		// greater than 1 still yields short reads here.
 		timeouts.ReadIntervalTimeout = MAXDWORD
 		timeouts.ReadTotalTimeoutMultiplier = MAXDWORD
 		timeouts.ReadTotalTimeoutConstant = MAXDWORD - 1

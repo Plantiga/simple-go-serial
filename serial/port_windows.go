@@ -95,7 +95,17 @@ func (p *Port) Write(buf []byte) (int, error) {
 	if err != nil && err != syscall.ERROR_IO_PENDING {
 		return int(n), errtrace.Wrap(err)
 	}
-	return errtrace.Wrap2(p.waitOverlapped(p.wo, timeout))
+	written, err := p.waitOverlapped(p.wo, timeout)
+	if err == nil && written < len(buf) {
+		// With no driver-side write timeout, WriteFile only completes short
+		// when a cancel reaped a partial transfer; io.Writer requires an
+		// error alongside a short count.
+		if p.closing.Load() {
+			return written, errtrace.Wrap(os.ErrClosed)
+		}
+		return written, errtrace.Wrap(os.ErrDeadlineExceeded)
+	}
+	return written, errtrace.Wrap(err)
 }
 
 func (p *Port) Close() error {
@@ -315,6 +325,11 @@ func (p *Port) waitOverlapped(o *syscall.Overlapped, timeout uint32) (int, error
 		// successfully in the window before the cancel lands.
 		syscall.CancelIoEx(p.fd, o)
 	default:
+		// The wait itself failed, but the operation may still be in
+		// flight; cancel and reap it so the kernel isn't left writing
+		// into the caller's buffer after we return.
+		syscall.CancelIoEx(p.fd, o)
+		getOverlappedResult(p.fd, o)
 		if err == nil {
 			err = syscall.EINVAL
 		}
