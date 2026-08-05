@@ -1,4 +1,5 @@
-// This portion of the package is currently untested and not being worked on
+// This portion of the package has no automated tests; it is exercised
+// against real hardware (Plantiga docks) on Windows.
 
 package serial
 
@@ -7,10 +8,15 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
 )
+
+// ERROR_OPERATION_ABORTED: what GetOverlappedResult reports for an operation
+// that was cancelled with CancelIoEx.
+const errOperationAborted syscall.Errno = 995
 
 type Port struct {
 	f          *os.File
@@ -27,6 +33,15 @@ type Port struct {
 	// guarded by rl+wl; makes Close idempotent so the event handles can't
 	// be double-closed (a second CloseHandle could hit a recycled handle).
 	closed bool
+	// set by Close before it cancels in-flight I/O; Read/Write consult it so
+	// an operation issued concurrently with Close still gets cancelled and
+	// the I/O locks settle (reads block indefinitely waiting for data now
+	// that the driver-side comm timeouts are gone).
+	closing atomic.Bool
+	// dlMu guards deadline. One deadline covers both reads and writes,
+	// mirroring how the POSIX ports use os.File.SetDeadline.
+	dlMu     sync.Mutex
+	deadline time.Time
 }
 
 func (p *Port) Read(buf []byte) (int, error) {
@@ -39,19 +54,23 @@ func (p *Port) Read(buf []byte) (int, error) {
 
 	// After Close the fd and event handle values may have been recycled by
 	// the OS; they must not reach any Windows API.
-	if p.closed {
+	if p.closed || p.closing.Load() {
 		return 0, errtrace.Wrap(os.ErrClosed)
 	}
 
+	timeout, err := p.waitTimeout()
+	if err != nil {
+		return 0, errtrace.Wrap(err)
+	}
 	if err := resetEvent(p.ro.HEvent); err != nil {
 		return 0, errtrace.Wrap(err)
 	}
 	var done uint32
-	err := syscall.ReadFile(p.fd, buf, &done, p.ro)
+	err = syscall.ReadFile(p.fd, buf, &done, p.ro)
 	if err != nil && err != syscall.ERROR_IO_PENDING {
 		return int(done), errtrace.Wrap(err)
 	}
-	return errtrace.Wrap2(getOverlappedResult(p.fd, p.ro))
+	return errtrace.Wrap2(p.waitOverlapped(p.ro, timeout))
 }
 
 func (p *Port) Write(buf []byte) (int, error) {
@@ -60,25 +79,42 @@ func (p *Port) Write(buf []byte) (int, error) {
 
 	// After Close the fd and event handle values may have been recycled by
 	// the OS; they must not reach any Windows API.
-	if p.closed {
+	if p.closed || p.closing.Load() {
 		return 0, errtrace.Wrap(os.ErrClosed)
 	}
 
+	timeout, err := p.waitTimeout()
+	if err != nil {
+		return 0, errtrace.Wrap(err)
+	}
 	if err := resetEvent(p.wo.HEvent); err != nil {
 		return 0, errtrace.Wrap(err)
 	}
 	var n uint32
-	err := syscall.WriteFile(p.fd, buf, &n, p.wo)
+	err = syscall.WriteFile(p.fd, buf, &n, p.wo)
 	if err != nil && err != syscall.ERROR_IO_PENDING {
 		return int(n), errtrace.Wrap(err)
 	}
-	return errtrace.Wrap2(getOverlappedResult(p.fd, p.wo))
+	return errtrace.Wrap2(p.waitOverlapped(p.wo, timeout))
 }
 
 func (p *Port) Close() error {
+	// Reads block until data arrives (there are no driver-side comm
+	// timeouts), so any in-flight operation must be cancelled or the I/O
+	// locks below would never settle. The order matters: the flag is set
+	// first, so an operation issued after the CancelIoEx below sees it in
+	// waitOverlapped and cancels itself.
+	// Only the first Close may touch p.fd here: once it completes, the
+	// handle value is closed and may have been recycled by the OS.
+	if !p.closing.Swap(true) {
+		// A nil overlapped cancels every pending operation on the handle
+		// regardless of which thread issued it; ERROR_NOT_FOUND just means
+		// nothing was in flight.
+		syscall.CancelIoEx(p.fd, nil)
+	}
+
 	// Take both IO locks so the event handles aren't closed out from under
-	// an in-flight overlapped operation; reads and writes complete within
-	// the configured comm timeouts, so the locks settle quickly.
+	// an in-flight overlapped operation.
 	p.rl.Lock()
 	defer p.rl.Unlock()
 	p.wl.Lock()
@@ -218,8 +254,84 @@ func escapeCommFunction(h syscall.Handle, code int) error {
 	return nil
 }
 
-func (p *Port) SetDeadline(time.Time) error {
+// SetDeadline sets the absolute time after which Read and Write fail with
+// os.ErrDeadlineExceeded, matching the os.File deadline behaviour the POSIX
+// ports get for free. A zero value means no deadline. Unlike os.File,
+// changing the deadline does not interrupt an operation that is already
+// blocked in Read or Write; the new deadline applies from the next call.
+func (p *Port) SetDeadline(t time.Time) error {
+	if p == nil || p.f == nil {
+		return errtrace.Wrap(fmt.Errorf("Invalid port on set deadline %v %v", p, p.f))
+	}
+	p.dlMu.Lock()
+	p.deadline = t
+	p.dlMu.Unlock()
 	return nil
+}
+
+// waitTimeout converts the port deadline into a WaitForSingleObject timeout
+// in milliseconds: INFINITE when no deadline is set, os.ErrDeadlineExceeded
+// (unwrapped; callers wrap) when it has already passed.
+func (p *Port) waitTimeout() (uint32, error) {
+	p.dlMu.Lock()
+	deadline := p.deadline
+	p.dlMu.Unlock()
+
+	if deadline.IsZero() {
+		return syscall.INFINITE, nil
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return 0, os.ErrDeadlineExceeded
+	}
+	// Round up so a deadline a few hundred microseconds out still waits,
+	// and cap below INFINITE (0xFFFFFFFF), which would mean "no timeout".
+	ms := (remaining + time.Millisecond - 1) / time.Millisecond
+	if ms >= syscall.INFINITE {
+		ms = syscall.INFINITE - 1
+	}
+	return uint32(ms), nil
+}
+
+// waitOverlapped waits for an in-flight overlapped operation to complete,
+// enforcing the deadline timeout computed by waitTimeout. On timeout the
+// operation is cancelled and os.ErrDeadlineExceeded returned; bytes that were
+// transferred before the cancel landed are returned as a successful short
+// operation instead, so no data is dropped.
+func (p *Port) waitOverlapped(o *syscall.Overlapped, timeout uint32) (int, error) {
+	// Close may have set closing and issued its CancelIoEx before this
+	// operation started; cancel it ourselves so Close isn't left waiting
+	// on the I/O lock we hold.
+	if p.closing.Load() {
+		syscall.CancelIoEx(p.fd, o)
+	}
+
+	s, err := syscall.WaitForSingleObject(o.HEvent, timeout)
+	switch s {
+	case syscall.WAIT_OBJECT_0:
+		// Completed; reap the result below.
+	case syscall.WAIT_TIMEOUT:
+		// Deadline hit. Cancel and still reap: the operation can complete
+		// successfully in the window before the cancel lands.
+		syscall.CancelIoEx(p.fd, o)
+	default:
+		if err == nil {
+			err = syscall.EINVAL
+		}
+		return 0, errtrace.Wrap(err)
+	}
+
+	n, err := getOverlappedResult(p.fd, o)
+	if err == errOperationAborted {
+		if n > 0 {
+			return n, nil
+		}
+		if p.closing.Load() {
+			return 0, errtrace.Wrap(os.ErrClosed)
+		}
+		return 0, errtrace.Wrap(os.ErrDeadlineExceeded)
+	}
+	return n, errtrace.Wrap(err)
 }
 
 func resetEvent(h syscall.Handle) error {
@@ -230,15 +342,18 @@ func resetEvent(h syscall.Handle) error {
 	return nil
 }
 
+// getOverlappedResult reaps a completed (or cancelled) overlapped operation,
+// waiting for it to finish if it hasn't yet (bWait=TRUE). The error is
+// returned unwrapped so callers can compare it against syscall.Errno values.
 func getOverlappedResult(h syscall.Handle, overlapped *syscall.Overlapped) (int, error) {
-	var n int
+	var n uint32
 	r, _, err := syscall.Syscall6(nGetOverlappedResult, 4,
 		uintptr(h),
 		uintptr(unsafe.Pointer(overlapped)),
 		uintptr(unsafe.Pointer(&n)), 1, 0, 0)
 	if r == 0 {
-		return n, errtrace.Wrap(err)
+		return int(n), err
 	}
 
-	return n, nil
+	return int(n), nil
 }
