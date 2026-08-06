@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This portion of the package is currently untested and not being worked on
+// This portion of the package has no automated tests; it is exercised
+// against real hardware (Plantiga docks) on Windows.
 
 package serial
 
@@ -174,65 +175,49 @@ func setCommState(h syscall.Handle, options OpenOptions) error {
 	return nil
 }
 
+// setCommTimeouts maps the POSIX VMIN/VTIME semantics used by the other
+// platforms onto Windows COMMTIMEOUTS. Absolute deadlines (SetDeadline) are
+// enforced per operation in Read/Write via CancelIoEx, not here.
+//
+// The magic combination below comes from
+// https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-commtimeouts:
+// with ReadIntervalTimeout and ReadTotalTimeoutMultiplier both MAXDWORD and
+// 0 < ReadTotalTimeoutConstant < MAXDWORD, ReadFile returns immediately if
+// bytes are already buffered, otherwise waits up to the constant for the
+// first byte to arrive, and times out (0 bytes, no error) if none does.
 func setCommTimeouts(h syscall.Handle, options OpenOptions) error {
 	var timeouts structTimeouts
 	const MAXDWORD = 1<<32 - 1
-	timeoutConstant := uint32(round(float64(options.InterCharacterTimeout) / 100.0))
-	readIntervalTimeout := uint32(options.MinimumReadSize)
 
-	if timeoutConstant > 0 && readIntervalTimeout == 0 {
-		//Assume we're setting for non blocking IO.
-		timeouts.ReadIntervalTimeout = MAXDWORD
-		timeouts.ReadTotalTimeoutMultiplier = MAXDWORD
-		timeouts.ReadTotalTimeoutConstant = timeoutConstant
-	} else if readIntervalTimeout > 0 {
-		// Assume we want to block and wait for input.
-		timeouts.ReadIntervalTimeout = readIntervalTimeout
-		timeouts.ReadTotalTimeoutMultiplier = 1
-		timeouts.ReadTotalTimeoutConstant = 1
-	} else {
-		// No idea what we intended, use defaults
-		// default config does what it did before.
+	switch {
+	case options.MinimumReadSize > 0:
+		// VMIN > 0: block until data arrives, however long that takes
+		// (MAXDWORD-1 ms is ~49 days). A Read under a deadline is cut off
+		// by CancelIoEx in waitOverlapped, not by the driver.
+		//
+		// COMMTIMEOUTS cannot enforce a minimum byte count: ReadFile
+		// returns as soon as any byte is buffered, so a MinimumReadSize
+		// greater than 1 still yields short reads here.
 		timeouts.ReadIntervalTimeout = MAXDWORD
 		timeouts.ReadTotalTimeoutMultiplier = MAXDWORD
 		timeouts.ReadTotalTimeoutConstant = MAXDWORD - 1
+	case options.InterCharacterTimeout > 0:
+		// VMIN == 0, VTIME > 0: wait up to the timeout for the first byte,
+		// returning whatever is buffered (possibly nothing).
+		constant := uint64(options.InterCharacterTimeout)
+		if constant >= MAXDWORD {
+			constant = MAXDWORD - 1
+		}
+		timeouts.ReadIntervalTimeout = MAXDWORD
+		timeouts.ReadTotalTimeoutMultiplier = MAXDWORD
+		timeouts.ReadTotalTimeoutConstant = uint32(constant)
+	default:
+		// VMIN == 0, VTIME == 0: fully non-blocking, return only what is
+		// already buffered. Interval MAXDWORD with both totals zero is the
+		// documented combination for that.
+		timeouts.ReadIntervalTimeout = MAXDWORD
 	}
-
-	/*
-			Empirical testing has shown that to have non-blocking IO we need to set:
-				ReadTotalTimeoutConstant > 0 and
-				ReadTotalTimeoutMultiplier = MAXDWORD and
-				ReadIntervalTimeout = MAXDWORD
-
-				The documentation states that ReadIntervalTimeout is set in MS but
-				empirical investigation determines that it seems to interpret in units
-				of 100ms.
-
-				If InterCharacterTimeout is set at all it seems that the port will block
-				indefinitly until a character is received.  Not all circumstances have been
-				tested. The input of an expert would be appreciated.
-
-			From http://msdn.microsoft.com/en-us/library/aa363190(v=VS.85).aspx
-
-			 For blocking I/O see below:
-
-			 Remarks:
-
-			 If an application sets ReadIntervalTimeout and
-			 ReadTotalTimeoutMultiplier to MAXDWORD and sets
-			 ReadTotalTimeoutConstant to a value greater than zero and
-			 less than MAXDWORD, one of the following occurs when the
-			 ReadFile function is called:
-
-			 If there are any bytes in the input buffer, ReadFile returns
-			       immediately with the bytes in the buffer.
-
-			 If there are no bytes in the input buffer, ReadFile waits
-		               until a byte arrives and then returns immediately.
-
-			 If no bytes arrive within the time specified by
-			       ReadTotalTimeoutConstant, ReadFile times out.
-	*/
+	// Writes get no driver-side timeout; deadlines cover them too.
 
 	r, _, err := syscall.Syscall(nSetCommTimeouts, 2, uintptr(h), uintptr(unsafe.Pointer(&timeouts)), 0)
 	if r == 0 {

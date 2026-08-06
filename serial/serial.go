@@ -73,6 +73,10 @@ type OpenOptions struct {
 	// more information, see the discussion of VMIN and VTIME here:
 	//
 	//     http://www.unixwiz.net/techtips/termios-vmin-vtime.html
+	//
+	// On Windows there is no VMIN equivalent: any MinimumReadSize > 0 makes
+	// Read block until at least one byte is available, but it may return
+	// fewer than MinimumReadSize bytes.
 
 	InterCharacterTimeout uint
 	MinimumReadSize       uint
